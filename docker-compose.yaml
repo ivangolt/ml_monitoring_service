@@ -1,0 +1,102 @@
+version: '3.7'
+
+x-airflow-common:
+  &airflow-common
+  image: apache/airflow:2.9.0
+  depends_on:
+    - postgres
+  environment:
+    - LOAD_EX=n
+    - EXECUTOR=Local
+    - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+    - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+    - AIRFLOW__WEBSERVER__SECRET_KEY=FB0o_zt4e3Ziq3LdUUO7F2Z95cvFFx16hU8jTeR1ASM=
+    - AIRFLOW__CORE__FERNET_KEY=FB0o_zt4e3Ziq3LdUUO7F2Z95cvFFx16hU8jTeR1ASM=
+    - AIRFLOW__CORE__LOAD_EXAMPLES=False
+    - AIRFLOW__CORE__LOGGING_LEVEL=INFO
+  volumes:
+    - ${AIRFLOW_PROJ_DIR:-.}/airflow/dags:/opt/airflow/dags
+    - ${AIRFLOW_PROJ_DIR:-.}/airflow/logs:/opt/airflow/logs
+    - ${AIRFLOW_PROJ_DIR:-.}/airflow/config:/opt/airflow/config
+    - ${AIRFLOW_PROJ_DIR:-.}/airflow/plugins:/opt/airflow/plugins
+    - ${AIRFLOW_PROJ_DIR:-.}/airflow/data:/opt/data
+  user: "${AIRFLOW_UID:-50000}:0"
+
+services:
+    postgres:
+        image: postgres:9.6
+        environment:
+            - POSTGRES_USER=airflow
+            - POSTGRES_PASSWORD=airflow
+            - POSTGRES_DB=airflow
+        logging:
+            options:
+                max-size: 10m
+                max-file: "3"
+    webserver:
+        << : *airflow-common
+        restart: always
+        depends_on:
+            - airflow-init
+        logging:
+            options:
+                max-size: 10m
+                max-file: "3"
+        ports:
+            - 8080:8080
+        command: webserver
+        healthcheck:
+            test: ["CMD-SHELL", "[ -f /usr/local/airflow/airflow-webserver.pid ]"]
+            interval: 30s
+            timeout: 30s
+            retries: 3
+
+    airflow-scheduler:
+      <<: *airflow-common
+      depends_on:
+        - airflow-init
+      command: scheduler
+      restart: always
+
+    airflow-init:
+        << : *airflow-common
+        entrypoint: /bin/bash
+        command:
+            - -c
+            - (airflow users list | grep "No data found") && ( airflow db init &&
+                airflow users create
+                  --role Admin
+                  --username airflow
+                  --password airflow
+                  --email airflow@airflow.com
+                  --firstname airflow
+                  --lastname airflow )
+
+    monitor:
+      build:
+        context: ./monitor
+        dockerfile: DockerfileMonitor
+      ports:
+        - 5445:5445
+      restart: always
+
+    prometheus:
+      image: prom/prometheus:latest
+      restart: unless-stopped
+      volumes:
+        - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+        - ./prometheus/data:/prometheus
+      command:
+        - '--config.file=/etc/prometheus/prometheus.yml'
+        - '--storage.tsdb.path=/prometheus'
+        - '--web.console.libraries=/etc/prometheus/console_libraries'
+        - '--web.console.templates=/etc/prometheus/consoles'
+        - '--web.enable-lifecycle'
+      expose:
+        - 9090
+
+    grafana:
+      image: grafana/grafana-enterprise
+      restart: unless-stopped
+      ports:
+        - '3000:3000'

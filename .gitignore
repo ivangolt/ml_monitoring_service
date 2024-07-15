@@ -1,0 +1,8 @@
+*.log
+*.txt
+*.dat
+*.csv
+venv/
+*.json
+prometheus/data/
+*.off

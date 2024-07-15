@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 1m
+
+scrape_configs:
+  - job_name: 'drift-monitor'
+    scrape_interval: 1m
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['monitor:5445']
