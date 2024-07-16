@@ -25,7 +25,7 @@ def fetch_last_file(directory: pathlib.Path) -> pathlib.Path:
     catchup=False,
     tags=["monitoring"],
 )
-def simple_detector():
+def drift_detector():
     @task()
     def fetch_features_control() -> str:
         last_file = fetch_last_file(pathlib.Path("/opt/data/control"))
@@ -53,43 +53,33 @@ def simple_detector():
     @task.virtualenv(
         use_dill=True,
         system_site_packages=False,
-        requirements=[
-            #'evidently==0.4.19'
-            "pandas==2.2.2"
-        ],
+        requirements=["pandas==2.2.2", "scipy==1.12.0"],
     )
     def apply_detection(control_path: str, current_path: str, metadata: dict):
         import pandas as pd
+        from scipy.stats import ks_2samp
+
+        def ks_test(old_feature, new_feature):
+            ks_statistic, p_value = ks_2samp(old_feature, new_feature)
+            return p_value
 
         control_dataset = pd.read_csv(control_path)
         current_dataset = pd.read_csv(current_path)
 
         feature_columns = [k for k, v in metadata.items() if v == "numeric"]
 
-        result = (
-            (
-                current_dataset[feature_columns].quantile(0.5)
-                / control_dataset[feature_columns].quantile(0.5)
-                - 1
-            )
-            * 100
-        ).rename(lambda x: x + "__median").to_dict() | (
-            (
-                current_dataset[feature_columns].mean()
-                / control_dataset[feature_columns].mean()
-                - 1
-            )
-            * 100
-        ).rename(lambda x: x + "__mean").to_dict()
+        result = {}
+        for column in feature_columns:
+            p_value = ks_test(control_dataset[column], current_dataset[column])
+            result[column] = p_value
 
         return result
 
     @task()
     def send_metrics(metrics: typing.Dict[str, float]):
-        for feature_metric, value in metrics.items():
-            split_index = feature_metric.rfind("__")
-            feature = feature_metric[:split_index]
-            metric = feature_metric[split_index + 2 :]
+        for feature, value in metrics.items():
+            feature = feature
+            metric = "p_value"
 
             reply = requests.post(
                 "http://monitor:5445/drift",
@@ -108,4 +98,4 @@ def simple_detector():
     send_metrics(metrics)
 
 
-simple_detector()
+drift_detector()
